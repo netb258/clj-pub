@@ -1,1 +1,1 @@
-EPUB extracted contents go here.
+EPUB extracted contents go in this directory.
