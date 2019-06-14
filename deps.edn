@@ -1,0 +1,5 @@
+{:deps {org.clojure/clojure {:mvn/version "1.10.1"}
+        me.raynes/fs {:mvn/version "1.4.6"}
+        net.sf.cssbox/swingbox {:mvn/version "1.1"}
+        seesaw {:mvn/version "1.5.0"}}}
+

@@ -8,3 +8,10 @@ Desktop EPUB reader written in Clojure.
 
 
     $ lein run
+
+# Running with clj
+
+```bash
+clj -Sdeps '{:deps {epub {:git/url "https://github.com/netb258/clj-pub.git" :sha "<SHA>"}}}' -m epub.core
+```
+
