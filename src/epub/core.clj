@@ -7,6 +7,7 @@
             [clojure.string :as s])
   (:use [seesaw.core :only [native! config! show! scrollable frame left-right-split vertical-panel tabbed-panel button action menu menubar menu-item]]
         [seesaw.chooser]
+        [clojure.java.shell :only [sh]]
         [clojure.xml :only [parse]])
   (:gen-class))
 
@@ -167,6 +168,7 @@
 ;; ------------------------------------------------ GUI rendering -------------------------------------------------
 ;; ----------------------------------------------------------------------------------------------------------------
 
+;; SwingBox seems to have some trouble with the native widgets.
 (native!)
 
 (def html-pane (BrowserPane.))
@@ -179,16 +181,19 @@
        (let [chap (rename-xhtml chapter)]
          (button
            :text (:name chap)
+           :tip (:name chap)
            :listen [:action (fn [event] (.setPage html-pane (java.net.URL. (get-full-path (:path chap)))))])))
      chapters)))
 
 (defn make-gui []
-  (left-right-split
-   (tabbed-panel
-    :tabs
-    [{:title "Table of content" :content (scrollable (vertical-panel :items (make-nav-buttons (get-chapters (get-book-files @epub-file)))))}
-     {:title "Spine" :content (scrollable (vertical-panel :items (make-nav-buttons (get-spine (get-book-files @epub-file)))))}])
-   (scrollable html-pane)))
+  (let [book-view (scrollable html-pane)
+        _ (.setUnitIncrement (.getVerticalScrollBar book-view) 7)] ;; Set the scroll speed.
+    (left-right-split
+         (tabbed-panel
+           :tabs
+           [{:title "Table of content" :content (scrollable (vertical-panel :items (make-nav-buttons (get-chapters (get-book-files @epub-file)))))}
+            {:title "Spine" :content (scrollable (vertical-panel :items (make-nav-buttons (get-spine (get-book-files @epub-file)))))}])
+         book-view)))
 
 (declare main-window)
 
@@ -210,11 +215,26 @@
 (defn make-menu-bar []
   (menubar :items
            [(menu :text "File" :items [choose-book-action
+                                       (menu-item :text "Books directory"
+                                                  :listen [:action
+                                                           (fn [event]
+                                                             (sh "cmd"
+                                                                 "/C"
+                                                                 "explorer"
+                                                                 (str "\"" "books" "\"")))])
+                                       (menu-item :text "Books data"
+                                                  :listen [:action
+                                                           (fn [event]
+                                                             (sh "cmd"
+                                                                 "/C"
+                                                                 "explorer"
+                                                                 (str "\"" "tmp" "\"")))])
                                        (menu-item :text "Exit" :listen [:action (fn [event] (System/exit 0))])])]))
 
 
 (defn make-main-window [child-widgets]
   (frame :title "EPUB Reader"
+         :icon (io/file "icon/icon.png")
          :width 900
          :height 850
          :menubar (make-menu-bar)
