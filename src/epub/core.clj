@@ -1,6 +1,9 @@
 (ns epub.core
   (:import [java.util.zip ZipFile]
-           [org.fit.cssbox.swingbox BrowserPane])
+           [javafx.embed.swing JFXPanel]
+           [javafx.application Platform]
+           [javafx.scene Scene]
+           [javafx.scene.web WebView])
   (:require [me.raynes.fs.compression :as compress]
             [me.raynes.fs :as fs]
             [clojure.java.io :as io]
@@ -150,50 +153,85 @@
          sp-ids (spine-ids opf-parsed)]
      (->> (spine-hrefs book-files sp-ids) (spine)))))
 
+;; NOTE: This function is not needed anymore, as SwingBox has been replaced with JavaFX.
 ;; It seems SwingBox has some problems with xhtml files, so we need to rename them to html files.
-(defn rename-xhtml [chapter]
-  (if (s/includes? (:path chapter) ".xhtml")
-    (let [file-head (first (s/split (:path chapter) #"\."))
-          new-path (str file-head ".html")
-          new-path-full (str (get-pwd) sys-sep (get-book-dir @epub-file) sys-sep new-path)
-          old-path-full (str (get-pwd) sys-sep (get-book-dir @epub-file) sys-sep file-head ".xhtml")]
-      (when (not (fs/exists? new-path-full))
-        (fs/rename
-          old-path-full
-          new-path-full))
-      (assoc-in chapter [:path] new-path))
-    chapter))
+;; (defn rename-xhtml [chapter]
+;;   (if (s/includes? (:path chapter) ".xhtml")
+;;     (let [file-head (first (s/split (:path chapter) #"\."))
+;;           new-path (str file-head ".html")
+;;           new-path-full (str (get-pwd) sys-sep (get-book-dir @epub-file) sys-sep new-path)
+;;           old-path-full (str (get-pwd) sys-sep (get-book-dir @epub-file) sys-sep file-head ".xhtml")]
+;;       (when (not (fs/exists? new-path-full))
+;;         (fs/rename
+;;           old-path-full
+;;           new-path-full))
+;;       (assoc-in chapter [:path] new-path))
+;;     chapter))
 
 ;; ----------------------------------------------------------------------------------------------------------------
 ;; ------------------------------------------------ GUI rendering -------------------------------------------------
 ;; ----------------------------------------------------------------------------------------------------------------
 
-;; SwingBox seems to have some trouble with the native widgets.
-(native!)
+;; (native!)
 
-(def html-pane (BrowserPane.))
-(.setText html-pane "<html></html>")
+;; NOTE: Need to keep the JavaFX (WebView.) in an atom, otherwise it complains about improper state.
+(def html-pane (atom nil))
+
+(defn create-javafx-webview-panel!
+  "Creates a JavaFX WebView component with zoom functionality using Ctrl + mouse wheel."
+  []
+  (let [jfx-panel (JFXPanel.)] ; Initializes JavaFX toolkit
+    (Platform/runLater
+      (fn []
+        (let [webview (WebView.)]
+          (reset! html-pane webview) ; Store WebView in an atom for later use.
+          ;; Add zoom functionality using Ctrl + mouse scroll
+          (.setOnScroll webview
+            (reify javafx.event.EventHandler
+              (handle [_ event]
+                (when (.isControlDown event) ; Correct way to check if Ctrl key is pressed
+                  (let [deltaY (.getDeltaY event)
+                        current-zoom (.getZoom webview)]
+                    (.setZoom webview (if (> deltaY 0) (+ current-zoom 0.1) (max 0.1 (- current-zoom 0.1)))))))))
+          (.setScene jfx-panel (Scene. webview)))))
+    jfx-panel))
 
 (defn make-nav-buttons [chapters]
   (when (not= "" @epub-file)
     (map
-     (fn [chapter]
-       (let [chap (rename-xhtml chapter)]
-         (button
-           :text (:name chap)
-           :tip (:name chap)
-           :listen [:action (fn [event] (.setPage html-pane (java.net.URL. (get-full-path (:path chap)))))])))
-     chapters)))
+      (fn [chapter]
+        (button
+          :text (:name chapter)
+          :tip (:name chapter)
+          ;; NOTE: I need to handle the html-pane inside a JavaFX Platform/runLater, othersize the JavaFX web component complains about being in the wrong thread.
+          :listen [:action (fn [event]
+                             (Platform/runLater
+                               (fn []
+                                 (let [engine (.getEngine @html-pane)
+                                       load-worker (.getLoadWorker engine)]
+                                   (.load engine (-> (java.net.URL. (get-full-path (:path chapter))) .toExternalForm))
+                                   ;; We need to add a bit of JavaScript to ensure the text displays correctly even if Zoomed.
+                                   ;; Ensure JavaScript executes AFTER the page and the DOM loads.
+                                   (.addListener (.stateProperty load-worker)
+                                                 (reify javafx.beans.value.ChangeListener
+                                                   (changed [_ _ _ new-state]
+                                                     (when (= new-state javafx.concurrent.Worker$State/SUCCEEDED)
+                                                       (.executeScript engine " var elements = document.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6');
+                                                                                for (var i = 0; i < elements.length; i++) {
+                                                                                  elements[i].style.marginLeft = '0.3em';
+                                                                                  elements[i].style.marginRight = '1em';
+                                                                                  elements[i].style.textIndent = '0';
+                                                                                  elements[i].style.textAlign = 'justify';}")))))))))]))
+      chapters)))
 
 (defn make-gui []
-  (let [book-view (scrollable html-pane)
-        _ (.setUnitIncrement (.getVerticalScrollBar book-view) 7)] ;; Set the scroll speed.
-    (left-right-split
-         (tabbed-panel
-           :tabs
-           [{:title "Table of content" :content (scrollable (vertical-panel :items (make-nav-buttons (get-chapters (get-book-files @epub-file)))))}
-            {:title "Spine" :content (scrollable (vertical-panel :items (make-nav-buttons (get-spine (get-book-files @epub-file)))))}])
-         book-view)))
+  (left-right-split
+   (tabbed-panel
+    :tabs
+    [{:title "Table of content" :content (scrollable (vertical-panel :items (make-nav-buttons (get-chapters (get-book-files @epub-file)))))}
+     {:title "Spine" :content (scrollable (vertical-panel :items (make-nav-buttons (get-spine (get-book-files @epub-file)))))}])
+   ;; NOTE: About this IF. I don't want to create any JavaFX components in my main GUI unless they are actually needed. This helps a lot with lein uberjar.
+   (if (not= "" @epub-file) (scrollable (create-javafx-webview-panel!)) nil)))
 
 (declare main-window)
 
@@ -206,31 +244,22 @@
                 (swap! epub-file (fn [x] (str f)))
                 (when (not (fs/exists? (str temp-dir "/" (get-book-name @epub-file))))
                  (compress/unzip @epub-file (str temp-dir "/" (get-book-name @epub-file))))
-                (let [title-page (rename-xhtml (first (get-chapters (get-book-files @epub-file))))]
-                  (.setPage
-                    html-pane
-                    (java.net.URL. (get-full-path (:path title-page)))))
-                (config! main-window :content (make-gui)))))))
+                (config! main-window :content (make-gui))
+                (let [title-page (first (get-chapters (get-book-files @epub-file)))]
+                  ;; NOTE: I need to handle the html-pane inside a JavaFX Platform/runLater, othersize the JavaFX web component complains about being in the wrong thread.
+                  (Platform/runLater #(.load (.getEngine @html-pane) (-> (java.net.URL. (get-full-path (:path title-page))) .toExternalForm)))))))))
 
 (defn make-menu-bar []
   (menubar :items
-           [(menu :text "File" :items [choose-book-action
-                                       (menu-item :text "Books directory"
-                                                  :listen [:action
-                                                           (fn [event]
-                                                             (sh "cmd"
-                                                                 "/C"
-                                                                 "explorer"
-                                                                 (str "\"" "books" "\"")))])
-                                       (menu-item :text "Books data"
-                                                  :listen [:action
-                                                           (fn [event]
-                                                             (sh "cmd"
-                                                                 "/C"
-                                                                 "explorer"
-                                                                 (str "\"" "tmp" "\"")))])
-                                       (menu-item :text "Exit" :listen [:action (fn [event] (System/exit 0))])])]))
-
+           [(menu :text "File"
+                  :items [choose-book-action
+                          (menu-item :text "Books directory"
+                                     :listen [:action
+                                              (fn [event] (sh "cmd" "/C" "explorer" (str "\"" "books" "\"")))])
+                          (menu-item :text "Books data"
+                                     :listen [:action
+                                              (fn [event] (sh "cmd" "/C" "explorer" (str "\"" "tmp" "\"")))])
+                          (menu-item :text "Exit" :listen [:action (fn [event] (System/exit 0))])])]))
 
 (defn make-main-window [child-widgets]
   (frame :title "EPUB Reader"
@@ -246,4 +275,5 @@
 
 (defn -main
   [& args]
-  (show! main-window))
+  (show! main-window)
+  (println "Done!"))
