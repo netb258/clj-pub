@@ -3,9 +3,15 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.8.0"]
+  ;; :plugins [[cider/cider-nrepl "0.49.0"]]
+  :dependencies [[org.clojure/clojure "1.11.3"]
+                 [org.openjfx/javafx-controls "17.0.2"]
+                 [org.openjfx/javafx-fxml "17.0.2"]
+                 [org.openjfx/javafx-web "17.0.2"]
+                 [org.openjfx/javafx-swing "17.0.2"]
                  [me.raynes/fs "1.4.6"] ;; File tools.
-                 [net.sf.cssbox/swingbox "1.1"] ;; Pure Java HTML rendering component.
+                 ;; This component has been replaced with JavaFX, as it now longer works beyond Java 8.
+                 ;; [net.sf.cssbox/swingbox "1.1"] ;; Pure Java HTML rendering component.
                  [seesaw "1.5.0"]] ;; GUI library.
   :main ^:skip-aot epub.core
   :repl-options {:timeout 120000} ;; Set repl startup timeout to 1.2 min.
