@@ -24,18 +24,26 @@
   (-> (java.io.File. ".") .getAbsolutePath))
 
 (defn get-book-name
-  [book-file-path]
-  (-> book-file-path
+  [book-file-path-str]
+  (-> book-file-path-str
        (s/split (re-pattern (java.util.regex.Pattern/quote sys-sep)))
        (last)
        (s/split #"\.")
        (first)))
 
-(defn get-book-files [epub-file-path]
-  (->> (str temp-dir "/" (get-book-name epub-file-path)) (io/file) (file-seq)))
+(defn get-book-files
+  "Takes the path to an epub file as a string.
+  Returns all of the epubs files (xml, html, images and everyting) as a seq of java.io.File objects."
+  [epub-file-path-str]
+  (->> (str temp-dir "/" (get-book-name epub-file-path-str)) (io/file) (file-seq)))
 
-(defn get-book-dir [epub-file-path]
-  (let [toc-file (->> (get-book-files epub-file-path) (filter #(s/ends-with? (str %) ".ncx")) (first))
+(defn get-book-dir
+  "Takes the path to an epub file as a string.
+  Returns the directory containing all the epub's HTML files, style sheets and images.
+  That is usually the directory with the table of contents file (the .ncx file).
+  This directory is returned as a string."
+  [epub-file-path-str]
+  (let [toc-file (->> (get-book-files epub-file-path-str) (filter #(s/ends-with? (str %) ".ncx")) (first))
         toc-dir-path (.getParent toc-file)]
     toc-dir-path))
 
@@ -44,6 +52,8 @@
 ;; ----------------------------------------------------------------------------------------------------------------
 
 ;; A seq of parsed <navPoint> tags represents the table of contents of the book.
+;; The result of this function should be something like this:
+;; [{:tag :navPoint, :attrs ... :content ...} {:tag :navPoint, :attrs ... :content ...} ...]
 (defn nav-points [toc-parsed]
   (->> toc-parsed
        :content ;; Get all tags in the toc XML file.
@@ -82,7 +92,10 @@
    (empty?
     (filter #(= :navPoint (:tag %)) (:content nav-point)))))
 
-;; We want the chapters as a seq of maps like this '({:path "xhtml/chapter_001.html", :name "Chapter 1"} ...)
+;; nav-points should be a vector of maps, like this:
+;; [{:tag :navPoint, :attrs ... :content ...} {:tag :navPoint, :attrs ... :content ...} ...]
+;; The result is a seq of maps like this:
+;; '({:path "xhtml/chapter_001.html", :name "Chapter 1"} {:path "xhtml/chapter_002.html", :name "Chapter 2"} ...)
 (defn nav-seq
   ([nav-points] (nav-seq nav-points '()))
   ([nav-points result]
@@ -97,7 +110,12 @@
             (butlast nav-points)
             (conj result (nav-point->map (last nav-points)))))))
 
-(defn get-chapters [book-files]
+(defn get-chapters
+  "Takes an epub's files (xml, html, images and everyting) as a seq of java.io.File objects.
+  Returns all html files that are the books chapters along with the names of the chapters.
+  The result is a seq of maps, like this:
+  ({:path 'xhtml/chapter_001.html', :name 'Chapter 1'} {:path 'xhtml/chapter_002.html', :name 'Chapter 2'} ...)"
+  [book-files]
   (when (not= "" @epub-file)
     (let [toc-file (->> book-files (filter #(s/ends-with? (str %) ".ncx")) (first))
           toc-parsed (parse toc-file)]
@@ -105,7 +123,10 @@
         #(not (and (nil? (:name %)) (nil? (:path %))))
         (flatten (nav-seq (nav-points toc-parsed)))))))
 
-(defn get-full-path [chapter-path]
+(defn get-full-path
+  "Tales an HTML chapter path as a string.
+  Returns a properly formatted file URL as a string."
+  [chapter-path]
   (str "file:///" (get-pwd) "/" (get-book-dir @epub-file) "/" chapter-path))
 
 ;; ----------------------------------------------------------------------------------------------------------------
@@ -116,6 +137,9 @@
 ;; Now we are going to parse contents.opf, which should contain a description of every resource in the book (images, html files xml files, everything).
 ;; We are doing this because the table of contents file can be (and often is) malformed.
 
+;; The result of this function should be something like this:
+;; [{:tag :item, :attrs {:media-type "image/jpeg", :id "cover", :href "Images/cover.jpeg"}}
+;;  {:tag :item, :attrs {:media-type "text/css", :id "css", :href "Styles/stylesheet.css"}} ...]
 (defn all-book-files [opf-parsed]
   (->> opf-parsed
        :content
@@ -125,6 +149,8 @@
 
 ;; The spine should contain the files of the book in the order that they should appear.
 ;; Note, that they probably won't be well named, like in the table of content file.
+;; The result of this function should be a simple seq of strings, like this:
+;; '("id112" "id111" "id110" "id19" "id18" "id17" "id16")
 (defn spine-ids [opf-parsed]
   (->> opf-parsed
        :content
@@ -133,19 +159,31 @@
        :content
        (map #(->> % :attrs :idref)))) ;; We only need the IDs of the book's resources.
 
+;; This function takes the book's files (all-book-files) in this format:
+;; [{:tag :item, :attrs {:media-type "image/jpeg", :id "id573", :href "Images/cover.jpeg"}}
+;;  {:tag :item, :attrs {:media-type "application/xhtml+xml", :id "id168", :href "Text/titlepage.xhtml"}} ...]
+;; It takes a list of spine IDs (spine-ids) like this: '("id573" "id168" "id110" "id19" "id18" "id17" "id16")
+;; The function returns any :hrefs in all-book-files that have a match in spine-ids.
+;; The result is a simple seq of strings, like this:
+;; '("Images/cover.jpeg" "Text/titlepage.xhtml" ...)
 (defn spine-hrefs [all-book-files spine-ids]
   (->> all-book-files
       (filter #(.contains spine-ids (->> % :attrs :id)))
       (map #(->> % :attrs :href))))
 
-;; We need the spine conents in a seq of maps like this:
-;; ({:path "index_split_000.html", :name "Part 1"} {:path "index_split_001.html", :name "Part 2"} ...)
+;; Takes a list of strings (spine-hrefs), like this: '("index_split_000.html" "index_split_001.html")
+;; Returns a seq of maps, like this:
+;; '({:path "index_split_000.html", :name "Part 1"} {:path "index_split_001.html", :name "Part 2"} ...)
 (defn spine [spine-hrefs]
   (map-indexed
     (fn [idx itm] {:path itm :name (str "Part " (inc idx))})
     spine-hrefs))
 
-(defn get-spine [book-files]
+(defn get-spine
+  "Takes an epub's files (xml, html, images and everyting) as a seq of java.io.File objects.
+  Returns the book's spine as a seq of maps, like this:
+  ({:path 'index_split_000.html', :name 'Part 1'} {:path 'index_split_001.html', :name 'Part 2'} ...)"
+  [book-files]
   (when (not= "" @epub-file)
    (let [opf-file (->> book-files (filter #(s/ends-with? (str %) ".opf")) (first))
          opf-parsed (parse opf-file)
@@ -178,7 +216,8 @@
 (def html-pane (atom nil))
 
 (defn create-javafx-webview-panel!
-  "Creates a JavaFX WebView component with zoom functionality using Ctrl + mouse wheel."
+  "Creates a JavaFX WebView component with zoom functionality using Ctrl + mouse wheel.
+  The WebView component is wrapped inside a JFXPanel."
   []
   (let [jfx-panel (JFXPanel.)] ; Initializes JavaFX toolkit
     (Platform/runLater
@@ -219,7 +258,7 @@
                                                        (.executeScript engine " var elements = document.querySelectorAll('p, div, span, h1, h2, h3, h4, h5, h6');
                                                                                 for (var i = 0; i < elements.length; i++) {
                                                                                   elements[i].style.marginLeft = '0.3em';
-                                                                                  elements[i].style.marginRight = '1em';
+                                                                                  elements[i].style.marginRight = '0.5em';
                                                                                   elements[i].style.textIndent = '0';
                                                                                   elements[i].style.textAlign = 'justify';}")))))))))]))
       chapters)))
